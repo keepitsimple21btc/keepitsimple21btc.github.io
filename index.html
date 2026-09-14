@@ -111,11 +111,11 @@
 
       <div class="font-mono text-sm text-muted flex gap-6 sm:gap-8">
         <div>
-          <div class="text-amber text-xl leading-none">03</div>
+          <div class="text-amber text-xl leading-none">04</div>
           <div class="mt-1">spielbar</div>
         </div>
         <div>
-          <div class="text-muted text-xl leading-none">03</div>
+          <div class="text-muted text-xl leading-none">02</div>
           <div class="mt-1">in arbeit</div>
         </div>
       </div>
@@ -182,15 +182,26 @@
           </div>
         </section>
 
-        <!-- PLATZHALTER-KARTEN -->
-        <div class="locked-card bg-surface/50 border border-line rounded-lg p-6 flex flex-col justify-between min-h-[168px]">
-          <div>
-            <h3 class="font-display font-600 text-lg text-ink/70">Reaktionstest</h3>
-            <p class="text-muted text-sm mt-1">Wie schnell reagierst du auf ein Signal?</p>
+        <!-- REAKTIONSTEST — aktive Karte, nimmt volle Breite -->
+        <section class="md:col-span-2 bg-surface border border-line rounded-lg overflow-hidden">
+          <div class="px-6 sm:px-8 pt-6 pb-2 flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <h2 class="font-display font-600 text-xl text-ink">Reaktionstest</h2>
+              <p class="text-muted text-sm mt-1 max-w-sm">
+                Warte auf Grün, dann klicke so schnell du kannst. 5 Runden, ein Fehlstart und es geht von vorn los.
+              </p>
+            </div>
+            <span class="font-mono text-xs text-ok border border-ok/30 rounded px-2 py-1 self-start">
+              bereit
+            </span>
           </div>
-          <span class="font-mono text-xs text-muted mt-4">bald verfügbar</span>
-        </div>
 
+          <div id="reaktion-root" class="px-6 sm:px-8 pb-8 pt-4">
+            <!-- vom Skript befüllt -->
+          </div>
+        </section>
+
+        <!-- PLATZHALTER-KARTEN -->
         <div class="locked-card bg-surface/50 border border-line rounded-lg p-6 flex flex-col justify-between min-h-[168px]">
           <div>
             <h3 class="font-display font-600 text-lg text-ink/70">Muster-Folge</h3>
@@ -953,6 +964,189 @@
       return;
     }
   }
+
+  render();
+})();
+
+/* ============================================================
+   REAKTIONSTEST
+   ============================================================ */
+(function () {
+  const ROUNDS = 5;
+  const MIN_DELAY = 1200;
+  const MAX_DELAY = 4000;
+  const STORAGE_KEY = 'neurocade_reaktionstest_best';
+
+  const root = document.getElementById('reaktion-root');
+  let state = 'idle'; // idle | waiting | go | early | roundResult | done
+  let round = 0;
+  let times = [];
+  let goStart = 0;
+  let lastTime = 0;
+  let waitTimeoutId = null;
+  let advanceTimeoutId = null;
+
+  function getBest() {
+    const v = localStorage.getItem(STORAGE_KEY);
+    return v === null ? null : Number(v);
+  }
+  function setBest(v) {
+    localStorage.setItem(STORAGE_KEY, String(v));
+  }
+
+  function startGame() {
+    clearTimeout(waitTimeoutId);
+    clearTimeout(advanceTimeoutId);
+    round = 1;
+    times = [];
+    beginRound();
+  }
+
+  function beginRound() {
+    state = 'waiting';
+    render();
+    const delay = Math.random() * (MAX_DELAY - MIN_DELAY) + MIN_DELAY;
+    waitTimeoutId = setTimeout(() => {
+      state = 'go';
+      goStart = performance.now();
+      render();
+    }, delay);
+  }
+
+  function handleBoxClick() {
+    if (state === 'waiting') {
+      // Fehlstart
+      clearTimeout(waitTimeoutId);
+      state = 'early';
+      render();
+      advanceTimeoutId = setTimeout(() => {
+        state = 'idle';
+        round = 0;
+        times = [];
+        render();
+      }, 1300);
+      return;
+    }
+
+    if (state === 'go') {
+      lastTime = Math.round(performance.now() - goStart);
+      times.push(lastTime);
+      state = 'roundResult';
+      render();
+      advanceTimeoutId = setTimeout(() => {
+        if (round >= ROUNDS) {
+          finishGame();
+        } else {
+          round += 1;
+          beginRound();
+        }
+      }, 700);
+      return;
+    }
+    // 'idle', 'roundResult', 'early', 'done' -> Klicks auf die Box ignorieren
+  }
+
+  function finishGame() {
+    state = 'done';
+    const avg = Math.round(times.reduce((a, b) => a + b, 0) / times.length);
+    const best = getBest();
+    if (best === null || avg < best) setBest(avg);
+    render();
+  }
+
+  function avgTime() {
+    if (times.length === 0) return 0;
+    return Math.round(times.reduce((a, b) => a + b, 0) / times.length);
+  }
+  function bestSingle() {
+    if (times.length === 0) return 0;
+    return Math.min(...times);
+  }
+
+  function boxClasses() {
+    const base = 'focus-ring select-none rounded-lg border flex items-center justify-center text-center cursor-pointer transition-colors duration-150 h-48 sm:h-56';
+    if (state === 'waiting') return `${base} bg-bad/10 border-bad/40`;
+    if (state === 'go') return `${base} bg-ok/80 border-ok`;
+    if (state === 'early') return `${base} bg-bad/25 border-bad`;
+    if (state === 'roundResult') return `${base} bg-violet/20 border-violet/50`;
+    return `${base} bg-surface2 border-line`;
+  }
+
+  function boxLabel() {
+    if (state === 'waiting') return '<span class="text-bad font-mono text-sm">warte auf Grün …</span>';
+    if (state === 'go') return '<span class="font-display font-700 text-3xl text-base">JETZT!</span>';
+    if (state === 'early') return '<span class="text-bad font-display font-600 text-xl">zu früh! Nochmal von vorn.</span>';
+    if (state === 'roundResult') return `<span class="font-display font-700 text-4xl text-violet">${lastTime}ms</span>`;
+    return '';
+  }
+
+  function render() {
+    if (state === 'idle') {
+      const best = getBest();
+      root.innerHTML = `
+        <div class="flex flex-col items-center text-center py-10 gap-4">
+          <div class="font-mono text-sm text-muted">
+            beste ø-reaktionszeit:
+            <span class="text-amber">${best === null ? '—' : best + 'ms'}</span>
+          </div>
+          <button
+            id="reaktion-start-btn"
+            class="focus-ring font-display font-600 text-base px-6 py-3 rounded-md bg-amber text-base hover:brightness-110 transition"
+          >Runde starten</button>
+          <p class="text-muted text-xs max-w-xs">
+            ${ROUNDS} Durchgänge. Das Feld wird nach einer zufälligen Wartezeit grün — dann so schnell wie möglich klicken. Klickst du zu früh, geht's komplett von vorn los.
+          </p>
+        </div>
+      `;
+      document.getElementById('reaktion-start-btn').addEventListener('click', startGame);
+      return;
+    }
+
+    if (state === 'done') {
+      const best = getBest();
+      const avg = avgTime();
+      const isNewBest = best !== null && avg <= best;
+      root.innerHTML = `
+        <div class="flex flex-col items-center text-center py-8 gap-5">
+          <div class="font-mono text-xs text-muted">${isNewBest ? 'neue bestleistung' : 'runde beendet'}</div>
+          <div class="font-display font-700 text-5xl text-amber">${avg}ms</div>
+          <div class="flex gap-8 font-mono text-sm text-muted">
+            <div>schnellste <span class="text-ink">${bestSingle()}ms</span></div>
+            <div>durchgänge <span class="text-ink">${times.join(' / ')}</span></div>
+            <div>rekord <span class="text-ink">${best === null ? '—' : best + 'ms'}</span></div>
+          </div>
+          <button
+            id="reaktion-restart-btn"
+            class="focus-ring font-display font-600 text-ink px-6 py-3 rounded-md border border-amber/50 text-amber hover:bg-amber/10 transition mt-2"
+          >Nochmal spielen</button>
+        </div>
+      `;
+      document.getElementById('reaktion-restart-btn').addEventListener('click', startGame);
+      return;
+    }
+
+    // waiting | go | early | roundResult
+    root.innerHTML = `
+      <div class="flex items-center justify-between font-mono text-sm mb-6">
+        <div class="text-muted">Runde <span class="text-ink">${Math.min(round, ROUNDS)}</span> / ${ROUNDS}</div>
+        <div class="text-muted">ø bisher <span class="text-violet">${times.length ? avgTime() + 'ms' : '—'}</span></div>
+      </div>
+      <div id="reaktion-box" class="${boxClasses()}">
+        ${boxLabel()}
+      </div>
+    `;
+    const box = document.getElementById('reaktion-box');
+    if (box) box.addEventListener('click', handleBoxClick);
+  }
+
+  // Leertaste als Alternative zum Klick
+  document.addEventListener('keydown', (e) => {
+    if (e.code !== 'Space') return;
+    if (state === 'waiting' || state === 'go') {
+      e.preventDefault();
+      handleBoxClick();
+    }
+  });
 
   render();
 })();
