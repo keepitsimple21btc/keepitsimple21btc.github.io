@@ -111,11 +111,11 @@
 
       <div class="font-mono text-sm text-muted flex gap-6 sm:gap-8">
         <div>
-          <div class="text-amber text-xl leading-none">01</div>
+          <div class="text-amber text-xl leading-none">02</div>
           <div class="mt-1">spielbar</div>
         </div>
         <div>
-          <div class="text-muted text-xl leading-none">05</div>
+          <div class="text-muted text-xl leading-none">04</div>
           <div class="mt-1">in arbeit</div>
         </div>
       </div>
@@ -144,15 +144,26 @@
           </div>
         </section>
 
-        <!-- PLATZHALTER-KARTEN -->
-        <div class="locked-card bg-surface/50 border border-line rounded-lg p-6 flex flex-col justify-between min-h-[168px]">
-          <div>
-            <h3 class="font-display font-600 text-lg text-ink/70">Zahlen-Sprint</h3>
-            <p class="text-muted text-sm mt-1">Kopfrechnen unter Zeitdruck.</p>
+        <!-- ZAHLEN-SPRINT — aktive Karte, nimmt volle Breite -->
+        <section class="md:col-span-2 bg-surface border border-line rounded-lg overflow-hidden">
+          <div class="px-6 sm:px-8 pt-6 pb-2 flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <h2 class="font-display font-600 text-xl text-ink">Zahlen-Sprint</h2>
+              <p class="text-muted text-sm mt-1 max-w-sm">
+                Löse die Aufgabe im Kopf und tippe das richtige Ergebnis — so schnell du kannst.
+              </p>
+            </div>
+            <span class="font-mono text-xs text-ok border border-ok/30 rounded px-2 py-1 self-start">
+              bereit
+            </span>
           </div>
-          <span class="font-mono text-xs text-muted mt-4">bald verfügbar</span>
-        </div>
 
+          <div id="zahlen-root" class="px-6 sm:px-8 pb-8 pt-4">
+            <!-- vom Skript befüllt -->
+          </div>
+        </section>
+
+        <!-- PLATZHALTER-KARTEN -->
         <div class="locked-card bg-surface/50 border border-line rounded-lg p-6 flex flex-col justify-between min-h-[168px]">
           <div>
             <h3 class="font-display font-600 text-lg text-ink/70">Merk-Gitter</h3>
@@ -440,6 +451,247 @@
     if (n >= 1 && n <= 6) {
       const btn = root.querySelectorAll('.answer-btn')[n - 1];
       if (btn) answer(btn.dataset.color, btn);
+    }
+  });
+
+  render();
+})();
+
+/* ============================================================
+   ZAHLEN-SPRINT
+   ============================================================ */
+(function () {
+  const ROUND_SECONDS = 45;
+  const STORAGE_KEY = 'neurocade_zahlen_best';
+
+  const root = document.getElementById('zahlen-root');
+  let state = 'idle'; // idle | playing | done
+  let score = 0;
+  let streak = 0;
+  let bestStreak = 0;
+  let timeLeft = ROUND_SECONDS;
+  let timerId = null;
+  let current = null; // { text, answer, options }
+  let reactionStart = 0;
+  let reactionTimes = [];
+
+  function getBest() {
+    return Number(localStorage.getItem(STORAGE_KEY) || 0);
+  }
+  function setBest(v) {
+    localStorage.setItem(STORAGE_KEY, String(v));
+  }
+
+  function randInt(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+  }
+
+  function shuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  // Aufgabenschwierigkeit steigt leicht mit der aktuellen Serie
+  function pickRound() {
+    const level = Math.min(3, Math.floor(streak / 5));
+    const op = ['+', '-', '×', '÷'][randInt(0, 3)];
+    let a, b, answer, text;
+
+    if (op === '+') {
+      const max = 20 + level * 30;
+      a = randInt(1, max);
+      b = randInt(1, max);
+      answer = a + b;
+      text = `${a} + ${b}`;
+    } else if (op === '-') {
+      const max = 20 + level * 30;
+      a = randInt(1, max);
+      b = randInt(1, a); // kein negatives Ergebnis
+      answer = a - b;
+      text = `${a} − ${b}`;
+    } else if (op === '×') {
+      const maxA = 6 + level * 4;
+      const maxB = 6 + level * 3;
+      a = randInt(2, maxA);
+      b = randInt(2, maxB);
+      answer = a * b;
+      text = `${a} × ${b}`;
+    } else {
+      // Division so konstruieren, dass sie immer aufgeht
+      const maxB = 4 + level * 4;
+      b = randInt(2, maxB);
+      const maxQ = 4 + level * 4;
+      const q = randInt(2, maxQ);
+      a = b * q;
+      answer = q;
+      text = `${a} ÷ ${b}`;
+    }
+
+    // Plausible Falschantworten in der Nähe des richtigen Ergebnisses
+    const wrongPool = new Set();
+    while (wrongPool.size < 3) {
+      const delta = randInt(-6, 6) || 1;
+      const candidate = answer + delta * randInt(1, 3);
+      if (candidate !== answer && candidate >= 0) wrongPool.add(candidate);
+    }
+
+    const options = shuffle([answer, ...wrongPool]);
+    return { text, answer, options };
+  }
+
+  function startGame() {
+    state = 'playing';
+    score = 0;
+    streak = 0;
+    bestStreak = 0;
+    timeLeft = ROUND_SECONDS;
+    reactionTimes = [];
+    nextRound();
+    render();
+    timerId = setInterval(() => {
+      timeLeft -= 1;
+      if (timeLeft <= 0) {
+        endGame();
+      } else {
+        updateTimerOnly();
+      }
+    }, 1000);
+  }
+
+  function nextRound() {
+    current = pickRound();
+    reactionStart = performance.now();
+  }
+
+  function endGame() {
+    clearInterval(timerId);
+    state = 'done';
+    const best = getBest();
+    if (score > best) setBest(score);
+    render();
+  }
+
+  function answer(value, btnEl) {
+    if (state !== 'playing') return;
+    const rt = performance.now() - reactionStart;
+    reactionTimes.push(rt);
+    const correct = value === current.answer;
+
+    if (correct) {
+      score += 1;
+      streak += 1;
+      bestStreak = Math.max(bestStreak, streak);
+      flash(btnEl, 'flash-ok');
+    } else {
+      streak = 0;
+      flash(btnEl, 'flash-bad');
+    }
+    nextRound();
+    render();
+  }
+
+  function flash(el, cls) {
+    if (!el) return;
+    el.classList.remove('flash-ok', 'flash-bad');
+    void el.offsetWidth;
+    el.classList.add(cls);
+  }
+
+  function updateTimerOnly() {
+    const t = document.getElementById('zahlen-timer');
+    if (t) t.textContent = timeLeft;
+  }
+
+  function avgReaction() {
+    if (reactionTimes.length === 0) return 0;
+    return Math.round(reactionTimes.reduce((a, b) => a + b, 0) / reactionTimes.length);
+  }
+
+  function render() {
+    if (state === 'idle') {
+      root.innerHTML = `
+        <div class="flex flex-col items-center text-center py-10 gap-4">
+          <div class="font-mono text-sm text-muted">
+            höchste bisher erreichte Punktzahl:
+            <span class="text-amber">${getBest()}</span>
+          </div>
+          <button
+            id="zahlen-start-btn"
+            class="focus-ring font-display font-600 text-base px-6 py-3 rounded-md bg-amber text-base hover:brightness-110 transition"
+          >Runde starten</button>
+          <p class="text-muted text-xs max-w-xs">
+            ${ROUND_SECONDS} Sekunden. Löse die Aufgabe im Kopf und klicke das richtige Ergebnis — die Aufgaben werden mit deiner Serie schwerer.
+          </p>
+        </div>
+      `;
+      document.getElementById('zahlen-start-btn').addEventListener('click', startGame);
+      return;
+    }
+
+    if (state === 'playing') {
+      root.innerHTML = `
+        <div class="flex items-center justify-between font-mono text-sm mb-6">
+          <div class="text-muted">Punkte <span class="text-ink">${score}</span></div>
+          <div class="text-muted">Serie <span class="text-violet">${streak}</span></div>
+          <div class="text-muted">Zeit <span id="zahlen-timer" class="text-amber">${timeLeft}</span>s</div>
+        </div>
+
+        <div class="flex items-center justify-center py-8 sm:py-12">
+          <div
+            id="zahlen-task"
+            class="pulse-once font-display font-700 text-5xl sm:text-6xl tracking-wide select-none text-ink"
+          >${current.text}</div>
+        </div>
+
+        <div id="zahlen-answer-grid" class="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-4">
+          ${current.options.map((opt, i) => `
+            <button
+              data-value="${opt}"
+              class="focus-ring zahlen-answer-btn font-mono text-base py-3 rounded-md border border-line hover:border-white/30 transition-colors text-ink"
+            >${opt}<span class="block text-muted/70 text-[10px] mt-0.5">[${i + 1}]</span></button>
+          `).join('')}
+        </div>
+      `;
+      root.querySelectorAll('.zahlen-answer-btn').forEach(btn => {
+        btn.addEventListener('click', () => answer(Number(btn.dataset.value), btn));
+      });
+      return;
+    }
+
+    if (state === 'done') {
+      const best = getBest();
+      const isNewBest = score >= best && score > 0;
+      root.innerHTML = `
+        <div class="flex flex-col items-center text-center py-8 gap-5">
+          <div class="font-mono text-xs text-muted">${isNewBest ? 'neue bestleistung' : 'runde beendet'}</div>
+          <div class="font-display font-700 text-5xl text-amber">${score}</div>
+          <div class="flex gap-8 font-mono text-sm text-muted">
+            <div>beste serie <span class="text-ink">${bestStreak}</span></div>
+            <div>ø reaktion <span class="text-ink">${avgReaction()}ms</span></div>
+            <div>rekord <span class="text-ink">${best}</span></div>
+          </div>
+          <button
+            id="zahlen-restart-btn"
+            class="focus-ring font-display font-600 text-ink px-6 py-3 rounded-md border border-amber/50 text-amber hover:bg-amber/10 transition mt-2"
+          >Nochmal spielen</button>
+        </div>
+      `;
+      document.getElementById('zahlen-restart-btn').addEventListener('click', startGame);
+      return;
+    }
+  }
+
+  // Tastatur-Shortcuts 1–4 während des Spiels
+  document.addEventListener('keydown', (e) => {
+    if (state !== 'playing') return;
+    const n = Number(e.key);
+    if (n >= 1 && n <= 4) {
+      const btn = root.querySelectorAll('.zahlen-answer-btn')[n - 1];
+      if (btn) answer(Number(btn.dataset.value), btn);
     }
   });
 
